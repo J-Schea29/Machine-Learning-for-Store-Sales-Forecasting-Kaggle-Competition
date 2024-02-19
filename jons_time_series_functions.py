@@ -236,6 +236,8 @@ class Prepare_data:
             X_2 = torch.from_numpy(X_2.astype("float")).to(device)
             
         return X_1, X_2
+    
+    
 
 class Hybrid_Time_Series_ML:
     '''
@@ -248,14 +250,13 @@ class Hybrid_Time_Series_ML:
                  then it adds the predictions of the first model to the 2nd dataset. Default is Boosted.
                  
     Attributes:
-        ensure_as_dataframe(y_pred, X, y): A function used to ensure the final predictions are in the correct format.
-        stack_prediction(X_2, y_pred): Adds predictions from the first model to data for the 2nd model.
+        change_model: Change input either model
         fit(X_1, X_2, y): Fits Hybrid model to the data.
         predict(X_1, X_2): Generates Prediction for Hybrid model.
         name(): Gives the names of both models. 
     '''
     
-    def __init__(self, model_1, model_2, Boosted=True):    
+    def __init__(self, model_1, model_2, Boosted=True, to_tensor=False):    
         '''
         Initializes the Hybrid_Time_Series_ML class.
         
@@ -270,6 +271,7 @@ class Hybrid_Time_Series_ML:
         self.model_1 = model_1
         self.model_2 = model_2
         self.boosted = Boosted
+        self.to_tensor = to_tensor
 
     def change_model(self, model, first=True):
         '''
@@ -297,16 +299,16 @@ class Hybrid_Time_Series_ML:
             y: The target variable.
         '''
 
-        y_c = y_train.copy()
+        y_c = y.copy()
         y_c.set_index(["store_nbr", "family"], append=True, inplace=True)
         
         unstack_y = y_c.unstack(["store_nbr", "family"])
 
         self.unstack_y = unstack_y
         
-        self.model_1.fit(X_1_train, unstack_y)
+        self.model_1.fit(X_1, unstack_y)
 
-        y_fit = self.model_1.predict(X_1_train)
+        y_fit = self.model_1.predict(X_1)
 
         y_fit.columns = unstack_y.columns
         y_fit.index = X_1.index
@@ -320,7 +322,16 @@ class Hybrid_Time_Series_ML:
             
             y_resid = y_resid.stack(["store_nbr", "family"]).reset_index().sort_values(["store_nbr", "family", "date"])
 
-            self.model_2.fit(X_2_train, y_resid["sales"])
+            if self.to_tensor:
+                
+                X_2 = torch.from_dlpack(X_2.astype("float32").values).to(device)
+                y_t = torch.from_dlpack(y_resid[["sales"]].astype("float32").values).to(device)
+                self.model_2.fit(X_2, y_t)
+                
+            else:
+                
+                self.model_2.fit(X_2, y_resid.reset_index()["sales"])
+                
 
         else:
 
@@ -328,7 +339,16 @@ class Hybrid_Time_Series_ML:
             X_2 = X_2.copy()
             X_2["fit"] = y_fit["sales"]
 
-            self.model_2.fit(X_2_train, y_c.reset_index()["sales"])
+            if self.to_tensor:
+            
+                X_2 = torch.from_dlpack(X_2.astype("float32").values).to(device)
+                y_t = torch.from_dlpack(y_c.reset_index()[["sales"]].astype("float32").values).to(device)
+
+                self.model_2.fit(X_2, y_t)
+            
+            else:
+            
+                self.model_2.fit(X_2, y_c.reset_index()["sales"])
             
     def predict(self, X_1, X_2):
         '''
@@ -350,6 +370,10 @@ class Hybrid_Time_Series_ML:
         
         if self.boosted:
 
+            if self.to_tensor:
+
+                X_2 = torch.from_dlpack(X_2.astype("float32").values).to(device)
+
             y_pred_2 = cudf.DataFrame(self.model_2.predict(X_2))
 
             y_pred_1 = y_pred_1.set_index(["date", "store_nbr", "family"])
@@ -365,8 +389,12 @@ class Hybrid_Time_Series_ML:
 
             X_2 = X_2.copy()
             X_2["fit"] = y_pred_1["sales"]
-            
-            y_pred_stacked = cudf.DataFrame(xgb.predict(X_2))
+
+            if self.to_tensor:
+                
+                X_2 = torch.from_dlpack(X_2.astype("float32").values).to(device)
+                
+            y_pred_stacked = cudf.DataFrame(self.model_2.predict(X_2))
             
             y_pred_1 = y_pred_1.set_index(["date", "store_nbr", "family"])
             
@@ -380,3 +408,75 @@ class Hybrid_Time_Series_ML:
         Gives the names of both models. 
         '''
         return f"Model 1: {self.model_1.__class__.__name__}, Model 2: {self.model_2.__class__.__name__}"
+    
+
+class Hybrid_Pipeline:
+    '''
+    A class for creating a pipeline for Hybrid Machine Learning Models for Time Series.
+
+    Parameters:
+        Data_Preprocess: Takes the Prepare_Data Class.
+        model1: The first model to run.
+        model2: The second model to run.
+        Boosted: Determines whether the second model is fitted on the residual of the first, or if False, whether the predictions of the first are added to the second dataset.
+        to_tensor: Determines if X_2 gets converted to tensor.
+
+    Attributes:
+        fit(X, y): Transforms data and then fits the model to it.
+        predict(X): Transforms data and then makes predictions with it.
+    '''
+
+    def __init__(self, Data_Preprocess, model1, model2, Boosted=True, to_tensor=True):
+        '''
+        Initializes the Hybrid_Pipeline class.
+
+        Parameters:
+            Data_Preprocess: A class for transforming data.
+            model1: The first model to run.
+            model2: The second model to run.
+            Boosted: Determines whether the second model is fitted on the residual of the first, or if False, whether the predictions of the first are added to the second dataset.
+            to_tensor: Determines if X_2 gets converted to tensor.
+        '''
+        # Defining instance variables
+        self.preprocess = Data_Preprocess
+
+        # Calls Hybrid_Series Class
+        self.models = Hybrid_Time_Series_ML(model1, model2, Boosted=Boosted, to_tensor=to_tensor)
+
+    def fit(self, X, y):
+        '''
+        Transforms data and then fits the model to it.
+
+        Parameters:
+            X: Independent variable(s) for training, or a list with validation and training data.
+            y: The dependent variable(s) for training, or a list with validation and training data.
+        '''
+
+        # Exclude ID column
+        X_C = X.copy()
+        X_C.drop("id", axis=1, inplace=True)
+
+        X_1, X_2 = self.preprocess.fit_transform(X_C)
+        # Fit hybrid models
+        self.models.fit(X_1, X_2, y)
+
+    def predict(self, X):
+        '''
+        Transforms data and then makes predictions with it.
+
+        Parameters:
+            X: The independent variable(s).
+            
+        Returns:
+            DataFrame: Predicted values.
+        '''
+        # Exclude ID column
+        X_C = X.copy()
+        X_id = X_C["id"]
+        X_C.drop("id", axis=1, inplace=True)
+        X_1, X_2 = self.preprocess.transform(X_C)
+
+        pred = self.models.predict(X_1, X_2)
+        pred = pred.set_index(X_id)
+        # return predictions
+        return pred
