@@ -104,8 +104,9 @@ class ColTransformer_gpu:
         num = 0
         
         # Iterate over each transformer and apply transform
-        for name, transformer in self.transformers:
-            X_transformed = cudf.DataFrame(transformer.transform(X[name]))
+        for dtype, transformer in self.transformers:
+            
+            X_transformed = cudf.DataFrame(transformer.transform(X[X.columns[X.dtypes==dtype]]))
 
             prev_num = num
             num += len(X_transformed.columns)
