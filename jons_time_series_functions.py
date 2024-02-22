@@ -75,18 +75,21 @@ class ColTransformer_gpu:
         num = 0
         
         # Iterate over each transformer and apply fit_transform
-        for name, transformer in self.transformers:
-            X_transformed = cudf.DataFrame(transformer.fit_transform(X[name]))
+        for dtype, transformer in self.transformers:
+            try: 
+                X_transformed = cudf.DataFrame(transformer.fit_transform(X[X.columns[X.dtypes==dtype]]))
 
-            prev_num = num
-            num += len(X_transformed.columns)
-            
-            # Rename columns to ensure uniqueness
-            X_transformed.columns = [f"{i}" for i in range(prev_num, num)]
-            
-            transformed_features.append(X_transformed)  # Append transformed feature DataFrame
+                prev_num = num
+                num += len(X_transformed.columns)
 
-            X  = X.drop(name, axis=1)
+                # Rename columns to ensure uniqueness
+                X_transformed.columns = [f"{i}" for i in range(prev_num, num)]
+
+                transformed_features.append(X_transformed)  # Append transformed feature DataFrame
+
+                X  = X.drop(X.columns[X.dtypes==dtype], axis=1)
+            except:
+                break
 
         transformed_features.append(X)
         
@@ -105,18 +108,20 @@ class ColTransformer_gpu:
         
         # Iterate over each transformer and apply transform
         for dtype, transformer in self.transformers:
-            
-            X_transformed = cudf.DataFrame(transformer.transform(X[X.columns[X.dtypes==dtype]]))
+            try:
+                X_transformed = cudf.DataFrame(transformer.transform(X[X.columns[X.dtypes==dtype]]))
 
-            prev_num = num
-            num += len(X_transformed.columns)
-            
-            # Rename columns to ensure uniqueness
-            X_transformed.columns = [f"{i}" for i in range(prev_num, num)]
-            
-            transformed_features.append(X_transformed)  # Append transformed feature DataFrame
-            
-            X  = X.drop(name, axis=1)
+                prev_num = num
+                num += len(X_transformed.columns)
+
+                # Rename columns to ensure uniqueness
+                X_transformed.columns = [f"{i}" for i in range(prev_num, num)]
+
+                transformed_features.append(X_transformed)  # Append transformed feature DataFrame
+
+                X  = X.drop(X.columns[X.dtypes==dtype], axis=1)
+            except:
+                break
 
         transformed_features.append(X)
         
