@@ -2,6 +2,9 @@ import cudf
 import cupy as cp
 import pandas
 import numpy as np
+from cuml.metrics import mean_squared_error, mean_squared_log_error
+# Cross-Validation
+from sklearn.model_selection import TimeSeriesSplit
 
 # Torch
 import torch
@@ -253,3 +256,68 @@ class Hybrid_Pipeline:
         pred = pred.set_index(X_id)
         # return predictions
         return pred
+
+    
+def Time_Series_CV(model, X_C, y, splits=4, verbose=False):
+    # Use time series split for cross validation. 
+    cv_split = TimeSeriesSplit(n_splits = splits)
+    
+    # Create lists to append MSLE scores.
+    valid_msle = []
+    train_msle = []
+    
+    # Dates to index through. 
+    dates = X_C.index.drop_duplicates()
+    a = 0
+    
+    # Perform Cross-Validation to determine how model will do on unseen data.
+    for train_index, valid_index in cv_split.split(dates):
+
+        # Index dates.
+        date_train, date_valid = dates[train_index], dates[valid_index]
+
+        # Selecting data for y_train and y_valid.
+        y_train = y.loc[date_train]
+        y_valid = y.loc[date_valid]
+
+        # Selecting data for X_train and X_valid.
+        X_train = X_C.loc[date_train]
+        X_valid = X_C.loc[date_valid]
+
+        X_train = X_train.reset_index().sort_values(["store_nbr", "family", "date"])
+        X_valid = X_valid.reset_index().sort_values(["store_nbr", "family", "date"])
+        X_train = X_train.set_index(["date"])
+        X_valid = X_valid.set_index(["date"])
+
+        y_train = y_train.reset_index().sort_values(["store_nbr", "family", "date"])
+        y_valid = y_valid.reset_index().sort_values(["store_nbr", "family", "date"])
+        y_train = y_train.set_index(["date"])
+        y_valid = y_valid.set_index(["date"])
+
+
+        # Fitting model.
+        model.fit(X_train, y_train)
+
+        # Create predictions for Trainning and Validation.
+        pred = model.predict(X_valid)
+
+        # MSE for trainning and validation. 
+        valid_msle.append(float(mean_squared_log_error(y_valid["sales"], pred["sales"])))
+        
+        if verbose:
+            # Create predictions for Trainning and Validation.
+            fit = model.predict(X_train)
+        
+            # MSE for trainning and validation. 
+            train_msle.append(float(mean_squared_log_error(y_train["sales"], fit["sales"])))
+            
+            a = a+1
+            print(f"Fold {a}:") 
+            print(f"Training RMSLE: {cp.sqrt(mean_squared_log_error(y_train.sales, fit.sales)):.3f}, Validation RMSLE: {cp.sqrt(mean_squared_log_error(y_valid.sales, pred.sales)):.3f}")
+        
+    if verbose:
+        # Returns the square root of the average of the MSE.
+        print("Average Across Folds")
+        print(f"Training RMSLE:{np.sqrt(np.mean(train_msle)):.3f}, Validation RMSLE: {np.sqrt(np.mean(valid_msle)):.3f}")
+        
+    return float(np.sqrt(np.mean(valid_msle)))
